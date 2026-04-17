@@ -1,0 +1,15 @@
+# Ambiente Virtual - a "sala isolada" nunca sobe pro GitHub
+venv/
+
+# Cofre de chaves - NUNCA compartilhar
+.env
+
+# Cache do Python (lixo gerado automaticamente)
+__pycache__/
+*.pyc
+
+# Fila de retry (dados locais do projeto)
+fila_retry.txt
+
+# Configs do VS Code
+.vscode/
