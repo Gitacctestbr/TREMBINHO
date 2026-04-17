@@ -4,8 +4,23 @@ TREMBINHO - Integração Notion (API 2025-09-03)
 Responsável por criar e LISTAR páginas na database "trembobase".
 - Consulta via data_sources.query (Padrão 2026).
 - Filtros dinâmicos por Tipo, Status e RANGE DE DATA (Início/Fim).
-- Double-check [Y/n] para gravação.
+- Double-check [Y/n] para gravação (com bypass para canais assíncronos como Telegram).
 - Fix de fuso horário via campo time_zone.
+
+SPRINT 4 - BIDIRECIONAL:
+- Adicionado parâmetro `auto_confirmar` em criar_pagina_no_notion().
+- Default False preserva comportamento do terminal (pede [Y/n]).
+- Telegram Listener passará True para pular o prompt (não trava o bot).
+
+SPRINT 4 / PASSO 5.6 - NOVO CONTRATO DE LISTAGEM:
+- listar_itens_no_notion() agora devolve ESTRUTURA em vez de string crua:
+    • Sucesso: lista de dicts com chaves {nome, tipo, status, data, descricao}
+    • Erro:    {"erro": "mensagem descritiva"}
+    • Vazio:   lista vazia []
+- A formatação (cards, emojis, cabeçalho) é responsabilidade da camada acima
+  (agente.py), mantendo esta camada focada em I/O puro.
+- Retrocompatibilidade: listar_itens_formatado_legado() devolve a string crua
+  antiga, usada por verificar_pendencias.py até a migração do Passo 5.6.C.
 """
 
 import os
@@ -58,25 +73,44 @@ def _limpar_offset_se_houver(data_str):
     return data_str
 
 
+def _extrair_rich_text(rich_text_array):
+    """Concatena todos os segmentos de um campo rich_text do Notion."""
+    if not rich_text_array:
+        return ""
+    return "".join(bloco.get("plain_text", "") for bloco in rich_text_array)
+
+
 # -----------------------------------------------------------------------------
-# FUNÇÃO DE CONSULTA (ATUALIZADA SPRINT 2.5 - RANGE DE DATAS)
+# FUNÇÃO DE CONSULTA — NOVO CONTRATO (Passo 5.6)
 # -----------------------------------------------------------------------------
 def listar_itens_no_notion(tipo=None, status=None, data_inicio=None, data_fim=None):
     """
     Consulta o data_source do Notion aplicando filtros opcionais.
     Suporta busca por período (data_inicio até data_fim) ou dia exato.
+
+    Returns:
+        list[dict]: lista de itens no formato:
+            {
+                "nome": str,
+                "tipo": str,      # "Lead" | "Tarefa" | "Nota" | "Ideia" | "?"
+                "status": str,    # "Aberto" | "Em andamento" | "Concluído" | "?"
+                "data": str,      # ISO 8601 ou "Sem data"
+                "descricao": str  # pode ser string vazia
+            }
+        dict: {"erro": "mensagem"} em caso de falha de acesso/consulta.
+        list vazia: [] quando não há itens (ausência de erro).
     """
     ds_id = obter_data_source_id()
     if not ds_id:
-        return "Erro: Não foi possível acessar a base de dados do Notion."
+        return {"erro": "Não foi possível acessar a base de dados do Notion."}
 
     filtros_lista = []
-    
+
     if tipo:
         filtros_lista.append({"property": "Tipo", "select": {"equals": tipo}})
     if status:
         filtros_lista.append({"property": "Status", "select": {"equals": status}})
-        
+
     # Lógica de Filtro de Datas (O pulo do gato)
     if data_inicio or data_fim:
         d_inicio = data_inicio.split("T")[0] if data_inicio else None
@@ -100,33 +134,89 @@ def listar_itens_no_notion(tipo=None, status=None, data_inicio=None, data_fim=No
         resultado = notion.data_sources.query(**query_params)
         paginas = resultado.get("results", [])
 
-        if not paginas:
-            return "Nenhum item encontrado com esses filtros no período solicitado."
-
-        linhas = []
+        itens = []
         for p in paginas:
             props = p.get("properties", {})
-            nome = props.get("Nome", {}).get("title", [{}])[0].get("plain_text", "Sem título")
-            t = props.get("Tipo", {}).get("select", {}).get("name", "?")
-            s = props.get("Status", {}).get("select", {}).get("name", "?")
-            d = props.get("Data", {}).get("date", {}).get("start", "Sem data")
-            
-            linhas.append(f"- [{t}] {nome} | Status: {s} | Data: {d}")
 
-        return "\n".join(linhas)
+            # Nome (title)
+            title_array = props.get("Nome", {}).get("title", [])
+            nome = _extrair_rich_text(title_array) or "Sem título"
+
+            # Tipo e Status (select)
+            t = (props.get("Tipo", {}).get("select") or {}).get("name", "?")
+            s = (props.get("Status", {}).get("select") or {}).get("name", "?")
+
+            # Data
+            d = (props.get("Data", {}).get("date") or {}).get("start", "Sem data")
+
+            # Descrição (rich_text) - pode não existir
+            desc_array = props.get("Descrição", {}).get("rich_text", [])
+            descricao = _extrair_rich_text(desc_array)
+
+            itens.append({
+                "nome": nome,
+                "tipo": t,
+                "status": s,
+                "data": d,
+                "descricao": descricao,
+            })
+
+        return itens
 
     except Exception as e:
-        return f"Erro ao consultar o Notion: {str(e)}"
+        return {"erro": f"Erro ao consultar o Notion: {str(e)}"}
 
 
 # -----------------------------------------------------------------------------
-# FUNÇÃO DE GRAVAÇÃO (EXISTENTE)
+# RETROCOMPATIBILIDADE - string crua antiga (deprecar no Passo 5.6.C)
 # -----------------------------------------------------------------------------
-def criar_pagina_no_notion(nome, tipo, status, data, descricao):
-    """Cria uma nova linha no database com double-check [Y/n]."""
+def listar_itens_formatado_legado(tipo=None, status=None, data_inicio=None, data_fim=None):
+    """
+    Wrapper de compatibilidade: devolve a string crua no formato pré-5.6.
+    
+    Usado por verificar_pendencias.py enquanto não migra pro novo contrato.
+    Será removido no Passo 5.6.C.
+    
+    DEPRECATED: use listar_itens_no_notion() e formate na camada consumidora.
+    """
+    resultado = listar_itens_no_notion(tipo, status, data_inicio, data_fim)
+
+    # Erro
+    if isinstance(resultado, dict) and "erro" in resultado:
+        return f"Erro: {resultado['erro']}"
+
+    # Vazio
+    if not resultado:
+        return "Nenhum item encontrado com esses filtros no período solicitado."
+
+    # Lista de dicts -> string crua antiga
+    linhas = [
+        f"- [{item['tipo']}] {item['nome']} | Status: {item['status']} | Data: {item['data']}"
+        for item in resultado
+    ]
+    return "\n".join(linhas)
+
+
+# -----------------------------------------------------------------------------
+# FUNÇÃO DE GRAVAÇÃO (com bypass de confirmação para canais assíncronos)
+# -----------------------------------------------------------------------------
+def criar_pagina_no_notion(nome, tipo, status, data, descricao, auto_confirmar=False):
+    """
+    Cria uma nova linha no database.
+    
+    Args:
+        nome, tipo, status, data, descricao: campos da página.
+        auto_confirmar: 
+            - False (default): modo terminal. Pede [Y/n] antes de gravar.
+            - True: modo assíncrono (Telegram). Pula o prompt e grava direto.
+              O double-check deve ser feito PELO CHAMADOR antes de acionar essa função.
+    
+    Returns:
+        True se gravou, False se cancelou ou deu erro.
+    """
     data_str = str(data or "").strip()
     tem_hora = "T" in data_str
-    
+
     if not tem_hora:
         propriedade_data = {"date": {"start": data_str}}
     else:
@@ -138,12 +228,20 @@ def criar_pagina_no_notion(nome, tipo, status, data, descricao):
             }
         }
 
-    print(f"\n🤖 Trembinho: Vou criar {tipo} '{nome}' ({status}) para {data_str}. Manda ver? [Y/n]: ", end="")
-    confirmacao = input().strip().lower()
+    # -------------------------------------------------------------------------
+    # Double-check [Y/n] - só roda no modo terminal (bloqueante).
+    # No modo assíncrono (Telegram), o chamador já validou a intenção.
+    # -------------------------------------------------------------------------
+    if not auto_confirmar:
+        print(f"\n🤖 Trembinho: Vou criar {tipo} '{nome}' ({status}) para {data_str}. Manda ver? [Y/n]: ", end="")
+        confirmacao = input().strip().lower()
 
-    if confirmacao not in {"y", "yes", "s", "sim", ""}:
-        print("❌ Cancelado.")
-        return False
+        if confirmacao not in {"y", "yes", "s", "sim", ""}:
+            print("❌ Cancelado.")
+            return False
+    else:
+        # Log silencioso para rastreabilidade (útil se rodar terminal + listener simultâneos)
+        print(f"[NOTION/AUTO] Gravando: {tipo} '{nome}' ({status}) para {data_str}")
 
     ds_id = obter_data_source_id()
     try:
