@@ -10,6 +10,16 @@ __pycache__/
 
 # Fila de retry (dados locais do projeto)
 fila_retry.txt
+fila_retry_telegram.txt
+
+# Offset do listener Telegram (controle interno)
+telegram_offset.txt
+
+# Log de execucao do bot
+trembinho_bot.log
+
+# Launcher gerado pelo script de configuracao (contem caminho absoluto local)
+iniciar_bot.bat
 
 # Configs do VS Code
 .vscode/
