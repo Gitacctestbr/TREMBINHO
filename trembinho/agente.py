@@ -37,6 +37,7 @@ from datetime import datetime
 from trembinho.personalidade import PERSONALIDADE_TREMBINHO
 from trembinho.notion import criar_pagina_no_notion, listar_itens_no_notion, buscar_paginas_por_nome, atualizar_pagina_no_notion, excluir_pagina_no_notion
 from trembinho.datas import interpretar_data
+from trembinho.agendador import agendar_notificacao, interpretar_tempo_relativo, formatar_disparo_humano, listar_pendentes, LIMITE_SIMULTANEAS
 
 # -----------------------------------------------------------------------------
 # Configuração do motor local
@@ -91,6 +92,16 @@ def ferramenta_excluir_notion(nome_busca: str) -> bool:
     Remove (arquiva) uma entrada existente no Notion. Use para DELETAR, EXCLUIR, APAGAR ou REMOVER.
     Args:
         nome_busca: Nome (ou parte do nome) da entrada a localizar. OBRIGATÓRIO.
+    """
+    pass
+
+def ferramenta_agendar_notificacao(tempo: str, contexto: str) -> bool:
+    """
+    Agenda uma notificação para enviar ao SDR via Telegram após o tempo especificado.
+    Use para NOTIFICAR, LEMBRAR, AVISAR ou ALERTAR o SDR em um horário futuro.
+    Args:
+        tempo: Expressão de tempo quando disparar. Ex: "em 5 minutos", "daqui 2 horas", "às 14h30".
+        contexto: O que o SDR precisa ser lembrado. Ex: "enviar relatório para Rhuan".
     """
     pass
 
@@ -590,7 +601,7 @@ def criar_historico_novo():
 # -----------------------------------------------------------------------------
 # MOTOR PURO - processa uma mensagem e retorna a resposta
 # -----------------------------------------------------------------------------
-def processar_mensagem(mensagem_usuario_crua, historico, auto_confirmar_gravacao=False):
+def processar_mensagem(mensagem_usuario_crua, historico, auto_confirmar_gravacao=False, chat_id=None):
     """
     Motor de raciocínio do Trembinho, desacoplado de qualquer interface.
     """
@@ -602,7 +613,7 @@ def processar_mensagem(mensagem_usuario_crua, historico, auto_confirmar_gravacao
         resposta = ollama.chat(
             model=MODELO_LOCAL,
             messages=historico,
-            tools=[ferramenta_salvar_notion, ferramenta_listar_notion, ferramenta_editar_notion, ferramenta_excluir_notion],
+            tools=[ferramenta_salvar_notion, ferramenta_listar_notion, ferramenta_editar_notion, ferramenta_excluir_notion, ferramenta_agendar_notificacao],
             options=OPCOES_OLLAMA,
         )
 
@@ -901,6 +912,40 @@ def processar_mensagem(mensagem_usuario_crua, historico, auto_confirmar_gravacao
                     return (_formatar_confirmacao_exclusao(item), historico)
                 else:
                     return ("❌ Não consegui remover. Problema de conexão com o Notion.", historico)
+
+            # ROTA 5: AGENDAR NOTIFICAÇÃO
+            elif nome_funcao == "ferramenta_agendar_notificacao":
+                tempo_str = str(args.get("tempo", "")).strip()
+                contexto_str = str(args.get("contexto", "")).strip()
+
+                if not tempo_str or not contexto_str:
+                    return ("Não entendi quando ou o que notificar. Me diz o tempo e o que quer ser lembrado!", historico)
+
+                # Interpreta o tempo para datetime absoluto
+                dt_disparo = interpretar_tempo_relativo(tempo_str)
+                if not dt_disparo:
+                    return (f"Não consegui interpretar o tempo <b>{tempo_str}</b>. Tenta ex: 'em 5 minutos', 'daqui 2 horas', 'às 14h30'.", historico)
+
+                disparo_iso = dt_disparo.strftime("%Y-%m-%dT%H:%M:00")
+                disparo_humano = formatar_disparo_humano(dt_disparo)
+
+                # Usa chat_id recebido ou fallback para o do .env
+                import os
+                cid = str(chat_id) if chat_id else os.getenv("TELEGRAM_CHAT_ID", "")
+
+                sucesso, resultado = agendar_notificacao(cid, contexto_str, disparo_iso)
+
+                if sucesso:
+                    pendentes = len(listar_pendentes())
+                    return (
+                        f"⏰ <b>Notificação agendada!</b>\n\n"
+                        f"📌 <b>Lembrete:</b> {contexto_str}\n"
+                        f"🕐 <b>Disparo:</b> {disparo_humano}\n\n"
+                        f"<i>({pendentes}/{LIMITE_SIMULTANEAS} notificações na fila)</i>",
+                        historico,
+                    )
+                else:
+                    return (f"❌ Não consegui agendar: {resultado}", historico)
 
         # Conversa normal (sem tool call)
         return (msg.content or "", historico)

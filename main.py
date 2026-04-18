@@ -10,6 +10,7 @@ from trembinho.telegram_listener import rodar_listener
 from trembinho.ponte_telegram import processar_mensagem_telegram
 from trembinho.agente import processar_mensagem
 from trembinho.memoria import obter_historico, salvar_historico
+from trembinho.agendador import inicializar_agendador
 
 
 def _validar_env():
@@ -38,6 +39,7 @@ def main():
         return
 
     print("✅ Configurações validadas.")
+    inicializar_agendador()
     print("🚀 Iniciando bot Telegram em background...")
     print("=" * 50)
 

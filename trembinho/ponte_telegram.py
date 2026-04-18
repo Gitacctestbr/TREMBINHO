@@ -26,6 +26,8 @@ from dotenv import load_dotenv
 from trembinho.agente import processar_mensagem
 from trembinho.memoria import obter_historico, salvar_historico, resetar_historico, tamanho_historico
 from trembinho.notificador import enviar_mensagem_telegram
+from trembinho.agendador import listar_pendentes, formatar_disparo_humano
+from datetime import datetime
 
 # -----------------------------------------------------------------------------
 # Credenciais e constantes
@@ -138,6 +140,25 @@ def _tratar_comando_especial(chat_id, texto):
         )
         return True
 
+    if comando == "/notificacao":
+        pendentes = listar_pendentes()
+        if not pendentes:
+            _enviar_resposta(chat_id, "⏰ <b>Notificações agendadas</b>\n\n<i>Nenhuma notificação na fila. Campo limpo. 🧹</i>")
+        else:
+            agora = datetime.now()
+            linhas = []
+            for n in pendentes:
+                try:
+                    dt = datetime.fromisoformat(n["disparo_em"])
+                    tempo_restante = formatar_disparo_humano(dt)
+                except Exception:
+                    tempo_restante = n.get("disparo_em", "?")
+                contexto = n.get("contexto_original", "?")
+                linhas.append(f"• 🕐 {tempo_restante} — {contexto}")
+            corpo = "\n".join(linhas)
+            _enviar_resposta(chat_id, f"⏰ <b>Notificações agendadas ({len(pendentes)})</b>\n\n{corpo}")
+        return True
+
     return False
 
 
@@ -172,6 +193,7 @@ def processar_mensagem_telegram(chat_id, texto):
             texto,
             historico,
             auto_confirmar_gravacao=True,  # Telegram não tem [Y/n] interativo
+            chat_id=chat_id,
         )
 
         # 4) Salva histórico atualizado (com janela deslizante aplicada)
