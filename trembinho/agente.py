@@ -35,7 +35,7 @@ import json
 import re
 from datetime import datetime
 from trembinho.personalidade import PERSONALIDADE_TREMBINHO
-from trembinho.notion import criar_pagina_no_notion, listar_itens_no_notion
+from trembinho.notion import criar_pagina_no_notion, listar_itens_no_notion, buscar_paginas_por_nome, atualizar_pagina_no_notion, excluir_pagina_no_notion
 from trembinho.datas import interpretar_data
 
 # -----------------------------------------------------------------------------
@@ -83,6 +83,27 @@ def ferramenta_listar_notion(tipo: str = None, status: str = None, data_inicio: 
         status: Opcional. Um de [Aberto, Em andamento, Concluído].
         data_inicio: Opcional. Formato YYYY-MM-DD. Data inicial da busca.
         data_fim: Opcional. Formato YYYY-MM-DD. Data final da busca.
+    """
+    pass
+
+def ferramenta_excluir_notion(nome_busca: str) -> bool:
+    """
+    Remove (arquiva) uma entrada existente no Notion. Use para DELETAR, EXCLUIR, APAGAR ou REMOVER.
+    Args:
+        nome_busca: Nome (ou parte do nome) da entrada a localizar. OBRIGATÓRIO.
+    """
+    pass
+
+def ferramenta_editar_notion(nome_busca: str, novo_nome: str = "", novo_tipo: str = "", novo_status: str = "", nova_data: str = "", nova_descricao: str = "") -> bool:
+    """
+    Edita uma entrada existente no Notion. Use para EDITAR, MUDAR, ALTERAR, ATUALIZAR ou CORRIGIR.
+    Args:
+        nome_busca: Nome (ou parte do nome) da entrada a localizar. OBRIGATÓRIO.
+        novo_nome: Novo nome. Deixe "" se não mudar.
+        novo_tipo: Um de [Lead, Tarefa, Nota, Ideia]. Deixe "" se não mudar.
+        novo_status: Um de [Aberto, Em andamento, Concluído]. Deixe "" se não mudar.
+        nova_data: Data no formato YYYY-MM-DD ou YYYY-MM-DDTHH:MM:00. Deixe "" se não mudar.
+        nova_descricao: Nova descrição. Deixe "" se não mudar.
     """
     pass
 
@@ -504,6 +525,48 @@ def _formatar_confirmacao_salvamento(nome, tipo, status, data_iso):
     )
 
 
+def _formatar_confirmacao_edicao(item, campos_alterados):
+    """Confirmação após edição bem-sucedida de um item existente."""
+    nome = item.get("nome", "?")
+    tipo = item.get("tipo", "?")
+    status_final = campos_alterados.get("status") or item.get("status", "?")
+    data_final = campos_alterados.get("data") or item.get("data", "")
+    emoji_s = EMOJI_STATUS.get(status_final, "")
+    data_humana = _formatar_data_humana(data_final)
+    campos_txt = ", ".join(campos_alterados.keys())
+    return (
+        f"✏️ <b>{tipo}</b> atualizado:\n"
+        f"<b>{nome}</b>\n"
+        f"📅 {data_humana} {emoji_s} {status_final}\n"
+        f"<i>Campos alterados: {campos_txt}</i>"
+    )
+
+
+def _formatar_confirmacao_exclusao(item):
+    """Confirmação após arquivamento bem-sucedido."""
+    nome = item.get("nome", "?")
+    tipo = item.get("tipo", "?")
+    emoji_t = EMOJI_TIPO.get(tipo, "•")
+    return (
+        f"🗑️ {emoji_t} <b>{nome}</b> removido do pipeline.\n"
+        f"<i>(Arquivado no Notion — dá pra restaurar pelo site se precisar.)</i>"
+    )
+
+
+def _formatar_opcoes_para_escolha(resultados):
+    """Lista itens encontrados para o usuário escolher qual editar."""
+    linhas = []
+    for i, item in enumerate(resultados, 1):
+        nome = item.get("nome", "?")
+        tipo = item.get("tipo", "?")
+        status = item.get("status", "?")
+        data = _formatar_data_humana(item.get("data", ""))
+        emoji_t = EMOJI_TIPO.get(tipo, "•")
+        emoji_s = EMOJI_STATUS.get(status, "")
+        linhas.append(f"{i}. {emoji_t} <b>{nome}</b> — {tipo} — {data} {emoji_s}")
+    return "\n".join(linhas)
+
+
 # -----------------------------------------------------------------------------
 # Instrução mestre (system prompt) - centralizada para reuso
 # -----------------------------------------------------------------------------
@@ -539,7 +602,7 @@ def processar_mensagem(mensagem_usuario_crua, historico, auto_confirmar_gravacao
         resposta = ollama.chat(
             model=MODELO_LOCAL,
             messages=historico,
-            tools=[ferramenta_salvar_notion, ferramenta_listar_notion],
+            tools=[ferramenta_salvar_notion, ferramenta_listar_notion, ferramenta_editar_notion, ferramenta_excluir_notion],
             options=OPCOES_OLLAMA,
         )
 
@@ -558,8 +621,23 @@ def processar_mensagem(mensagem_usuario_crua, historico, auto_confirmar_gravacao
         else:
             match_salvar = re.search(r'\{.*"nome".*\}', msg.content or "", re.DOTALL)
             match_listar = re.search(r'\{.*"tipo".*\}', msg.content or "", re.DOTALL)
+            match_editar = re.search(r'\{.*"nome_busca".*\}', msg.content or "", re.DOTALL)
+            match_excluir = re.search(r'ferramenta_excluir_notion', msg.content or "")
 
-            if match_salvar:
+            if match_excluir and match_editar:
+                # Qwen vazou JSON com nome_busca mas intenção é excluir
+                try:
+                    args = json.loads(match_editar.group(0))
+                    nome_funcao = "ferramenta_excluir_notion"
+                except json.JSONDecodeError:
+                    pass
+            elif match_editar:
+                try:
+                    args = json.loads(match_editar.group(0))
+                    nome_funcao = "ferramenta_editar_notion"
+                except json.JSONDecodeError:
+                    pass
+            elif match_salvar:
                 try:
                     args = json.loads(match_salvar.group(0))
                     nome_funcao = "ferramenta_salvar_notion"
@@ -713,6 +791,116 @@ def processar_mensagem(mensagem_usuario_crua, historico, auto_confirmar_gravacao
                     )
                 else:
                     return ("❌ Tentei salvar mas a conexão falhou ou você cancelou.", historico)
+
+            # ROTA 3: EDITAR (busca por nome + PATCH parcial)
+            elif nome_funcao == "ferramenta_editar_notion":
+                # -----------------------------------------------------------------
+                # CAMPO nome_busca (obrigatório pra localizar o item)
+                # -----------------------------------------------------------------
+                nome_busca = str(args.get("nome_busca", "")).strip()
+                if not nome_busca:
+                    nome_busca = _extrair_nome_heuristico(mensagem_usuario_crua, "Lead") or ""
+
+                if not nome_busca:
+                    return ("Não consegui identificar qual item você quer editar. Me diz o nome!", historico)
+
+                # -----------------------------------------------------------------
+                # BUSCA no Notion
+                # -----------------------------------------------------------------
+                resultados = buscar_paginas_por_nome(nome_busca)
+
+                if isinstance(resultados, dict) and "erro" in resultados:
+                    return (f"❌ {resultados['erro']}", historico)
+
+                if len(resultados) == 0:
+                    return (f"Não achei nenhum item com o nome <b>{nome_busca}</b> no Notion. Confere se tá certo?", historico)
+
+                if len(resultados) > 1:
+                    opcoes = _formatar_opcoes_para_escolha(resultados)
+                    return (
+                        f"Achei {len(resultados)} itens com esse nome. Qual você quer editar?\n\n{opcoes}\n\n"
+                        f"<i>Me manda o nome completo do que você quer mudar.</i>",
+                        historico,
+                    )
+
+                # -----------------------------------------------------------------
+                # 1 resultado → monta campos de atualização (só os não-vazios)
+                # -----------------------------------------------------------------
+                item = resultados[0]
+                page_id = item["page_id"]
+                campos = {}
+
+                tipos_validos = {"Lead", "Tarefa", "Nota", "Ideia"}
+                status_validos = {"Aberto", "Em andamento", "Concluído"}
+
+                novo_nome = str(args.get("novo_nome", "")).strip()
+                if novo_nome:
+                    campos["nome"] = novo_nome
+
+                novo_tipo = str(args.get("novo_tipo", "")).strip().capitalize()
+                if novo_tipo in tipos_validos:
+                    campos["tipo"] = novo_tipo
+
+                novo_status = str(args.get("novo_status", "")).strip().capitalize()
+                if novo_status == "Em Andamento":
+                    novo_status = "Em andamento"
+                if novo_status in status_validos:
+                    campos["status"] = novo_status
+
+                nova_data_bruta = str(args.get("nova_data", "")).strip()
+                if nova_data_bruta:
+                    data_convertida = formatar_data_iso(nova_data_bruta, mensagem_original=mensagem_usuario_crua)
+                    if data_convertida:
+                        campos["data"] = data_convertida
+
+                nova_desc = str(args.get("nova_descricao", "")).strip()
+                if nova_desc and nova_desc.lower() not in DESCRICOES_GENERICAS:
+                    campos["descricao"] = nova_desc
+
+                if not campos:
+                    return ("Entendi que você quer editar, mas não identifiquei o que mudar. Me fala o campo e o novo valor!", historico)
+
+                if DEBUG_EXTRACAO:
+                    print(f"[EDIT] Editando '{item['nome']}' (page_id={page_id}): {campos}")
+
+                if atualizar_pagina_no_notion(page_id, campos):
+                    return (_formatar_confirmacao_edicao(item, campos), historico)
+                else:
+                    return ("❌ Não consegui atualizar. Problema de conexão com o Notion.", historico)
+
+            # ROTA 4: EXCLUIR (arquiva no Notion — reversível)
+            elif nome_funcao == "ferramenta_excluir_notion":
+                nome_busca = str(args.get("nome_busca", "")).strip()
+                if not nome_busca:
+                    nome_busca = _extrair_nome_heuristico(mensagem_usuario_crua, "Lead") or ""
+
+                if not nome_busca:
+                    return ("Não consegui identificar qual item excluir. Me diz o nome!", historico)
+
+                resultados = buscar_paginas_por_nome(nome_busca)
+
+                if isinstance(resultados, dict) and "erro" in resultados:
+                    return (f"❌ {resultados['erro']}", historico)
+
+                if len(resultados) == 0:
+                    return (f"Não achei nenhum item com o nome <b>{nome_busca}</b> no Notion.", historico)
+
+                if len(resultados) > 1:
+                    opcoes = _formatar_opcoes_para_escolha(resultados)
+                    return (
+                        f"Achei {len(resultados)} itens com esse nome. Qual você quer remover?\n\n{opcoes}\n\n"
+                        f"<i>Me manda o nome completo do que você quer excluir.</i>",
+                        historico,
+                    )
+
+                item = resultados[0]
+                if DEBUG_EXTRACAO:
+                    print(f"[DEL] Arquivando '{item['nome']}' (page_id={item['page_id']})")
+
+                if excluir_pagina_no_notion(item["page_id"]):
+                    return (_formatar_confirmacao_exclusao(item), historico)
+                else:
+                    return ("❌ Não consegui remover. Problema de conexão com o Notion.", historico)
 
         # Conversa normal (sem tool call)
         return (msg.content or "", historico)

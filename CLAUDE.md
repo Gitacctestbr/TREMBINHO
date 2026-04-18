@@ -128,35 +128,14 @@ Telegram (texto)
 - Push notifications com retry em disco
 
 ### ⚠️ Dívidas técnicas abertas
-- `testar_ponte.py` é gambiarra temporária — será substituído por `listener_main.py` no Passo 6
+- `testar_ponte.py` é gambiarra temporária — será substituído por `listener_main.py`
 - Bot morre quando PowerShell fecha (sem deploy automatizado ainda)
 - Qwen nem sempre infere `status=Aberto` em perguntas de listagem
 - Mensagens não-texto no Telegram (áudio, foto, sticker) são ignoradas silenciosamente
 
 ---
 
-## ROADMAP (ordem de execução)
-
-### Passo 6 — Deploy local (PRÓXIMO)
-- Criar `listener_main.py` oficial (substitui `testar_ponte.py`)
-- Configurar Task Scheduler do Windows pra subir o bot automaticamente no login
-- Bot deve reiniciar sozinho em caso de crash
-
-### Sprint 5 — Voice Notes
-- Detectar `update.message.voice` no listener
-- Baixar áudio via `getFile` do Telegram
-- Transcrever via **Groq API** (`whisper-large-v3-turbo`) — latência <2s, sem peso na VRAM
-- Texto transcrito entra no mesmo `processar_mensagem()` do Qwen
-- UX: mostrar transcrição primeiro ("🎙️ Entendi: '...'") depois executar
-
-### Sprint 6 — Multi-tenancy
-- `TELEGRAM_CHAT_ID` vira lista separada por vírgulas no `.env`
-- Firewall aceita qualquer ID da lista
-- Database Notion compartilhado entre SDRs
-- Memória já isolada por chat_id (zero mudança necessária)
-
 ### Fora de escopo (não implementar sem autorização)
-- Confirmação bidirecional [Y/n] no Telegram
 - Persistência de histórico em SQLite
 - TTS (text-to-speech)
 - WhatsApp / Discord

@@ -1,7 +1,7 @@
 """
 TREMBINHO - Integração Notion (API 2025-09-03)
 ===============================================
-Responsável por criar e LISTAR páginas na database "trembobase".
+Responsável por criar, LISTAR e EDITAR páginas na database "trembobase".
 - Consulta via data_sources.query (Padrão 2026).
 - Filtros dinâmicos por Tipo, Status e RANGE DE DATA (Início/Fim).
 - Double-check [Y/n] para gravação (com bypass para canais assíncronos como Telegram).
@@ -14,13 +14,17 @@ SPRINT 4 - BIDIRECIONAL:
 
 SPRINT 4 / PASSO 5.6 - NOVO CONTRATO DE LISTAGEM:
 - listar_itens_no_notion() agora devolve ESTRUTURA em vez de string crua:
-    • Sucesso: lista de dicts com chaves {nome, tipo, status, data, descricao}
+    • Sucesso: lista de dicts com chaves {page_id, nome, tipo, status, data, descricao}
     • Erro:    {"erro": "mensagem descritiva"}
     • Vazio:   lista vazia []
 - A formatação (cards, emojis, cabeçalho) é responsabilidade da camada acima
   (agente.py), mantendo esta camada focada em I/O puro.
 - Retrocompatibilidade: listar_itens_formatado_legado() devolve a string crua
   antiga, usada por verificar_pendencias.py até a migração do Passo 5.6.C.
+
+EDIÇÃO (Sprint 5):
+- buscar_paginas_por_nome(): busca case-insensitive por substring do nome.
+- atualizar_pagina_no_notion(): PATCH parcial em qualquer campo.
 """
 
 import os
@@ -154,6 +158,7 @@ def listar_itens_no_notion(tipo=None, status=None, data_inicio=None, data_fim=No
             descricao = _extrair_rich_text(desc_array)
 
             itens.append({
+                "page_id": p.get("id", ""),
                 "nome": nome,
                 "tipo": t,
                 "status": s,
@@ -258,4 +263,93 @@ def criar_pagina_no_notion(nome, tipo, status, data, descricao, auto_confirmar=F
         return True
     except Exception as e:
         print(f"[ERRO] {e}")
+        return False
+
+
+# -----------------------------------------------------------------------------
+# BUSCA POR NOME (para edição)
+# -----------------------------------------------------------------------------
+def buscar_paginas_por_nome(nome_busca):
+    """
+    Retorna todas as entradas cujo campo Nome contenha nome_busca (case-insensitive).
+
+    Returns:
+        list[dict]: itens com {page_id, nome, tipo, status, data, descricao}
+        dict: {"erro": "mensagem"} em caso de falha.
+    """
+    todos = listar_itens_no_notion()
+    if isinstance(todos, dict) and "erro" in todos:
+        return todos
+    termo = nome_busca.strip().lower()
+    return [item for item in todos if termo in item.get("nome", "").lower()]
+
+
+# -----------------------------------------------------------------------------
+# ATUALIZAÇÃO DE PÁGINA (PATCH parcial)
+# -----------------------------------------------------------------------------
+def atualizar_pagina_no_notion(page_id, campos):
+    """
+    Atualiza apenas os campos fornecidos em uma página existente.
+
+    Args:
+        page_id (str): ID da página no Notion.
+        campos (dict): chaves em {nome, tipo, status, data, descricao} — apenas
+                       os que devem ser alterados. Campos ausentes não são tocados.
+
+    Returns:
+        True se atualizou, False em caso de erro.
+    """
+    properties = {}
+
+    if campos.get("nome"):
+        properties["Nome"] = {"title": [{"text": {"content": campos["nome"]}}]}
+
+    if campos.get("tipo"):
+        properties["Tipo"] = {"select": {"name": campos["tipo"]}}
+
+    if campos.get("status"):
+        properties["Status"] = {"select": {"name": campos["status"]}}
+
+    if campos.get("data"):
+        data_str = str(campos["data"]).strip()
+        tem_hora = "T" in data_str
+        if not tem_hora:
+            properties["Data"] = {"date": {"start": data_str}}
+        else:
+            data_limpa = _limpar_offset_se_houver(data_str)
+            properties["Data"] = {"date": {"start": data_limpa, "time_zone": FUSO_HORARIO_IANA}}
+
+    if campos.get("descricao") is not None and campos["descricao"] != "":
+        properties["Descrição"] = {"rich_text": [{"text": {"content": campos["descricao"]}}]}
+
+    if not properties:
+        print("[NOTION/EDIT] Nenhum campo para atualizar.")
+        return False
+
+    print(f"[NOTION/EDIT] Atualizando page_id={page_id}: {list(properties.keys())}")
+    try:
+        notion.pages.update(page_id=page_id, properties=properties)
+        return True
+    except Exception as e:
+        print(f"[ERRO] Falha ao atualizar página: {e}")
+        return False
+
+
+# -----------------------------------------------------------------------------
+# EXCLUSÃO DE PÁGINA (arquivamento — reversível pelo site do Notion)
+# -----------------------------------------------------------------------------
+def excluir_pagina_no_notion(page_id):
+    """
+    Arquiva uma página no Notion (equivalente a "deletar" pela API).
+    A página some do database mas pode ser restaurada pelo site do Notion.
+
+    Returns:
+        True se arquivou, False em caso de erro.
+    """
+    print(f"[NOTION/DEL] Arquivando page_id={page_id}")
+    try:
+        notion.pages.update(page_id=page_id, archived=True)
+        return True
+    except Exception as e:
+        print(f"[ERRO] Falha ao arquivar página: {e}")
         return False
