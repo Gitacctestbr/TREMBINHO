@@ -20,6 +20,7 @@ from dotenv import load_dotenv
 
 from trembinho.telegram_listener import rodar_listener
 from trembinho.ponte_telegram import processar_mensagem_telegram
+from trembinho.agendador import inicializar_agendador
 
 # ---------------------------------------------------------------------------
 # Logging: console + arquivo
@@ -79,6 +80,9 @@ def main():
     log.info("=" * 55)
     log.info("🚂 TREMBINHO BOT — iniciando (produção / Passo 6)")
     log.info("=" * 55)
+
+    inicializar_agendador()
+    log.info("⏰ Agendador de notificações inicializado.")
 
     crashes = 0
 

@@ -353,3 +353,48 @@ def excluir_pagina_no_notion(page_id):
     except Exception as e:
         print(f"[ERRO] Falha ao arquivar página: {e}")
         return False
+
+
+# -----------------------------------------------------------------------------
+# EXCLUSÃO EM MASSA POR FILTRO (bulk delete — Sprint 9)
+# -----------------------------------------------------------------------------
+def excluir_itens_por_filtro(tipo=None, status=None, data_inicio=None, data_fim=None):
+    """
+    Arquiva todos os itens que batem com os filtros fornecidos.
+
+    Args:
+        tipo: Opcional. "Lead" | "Tarefa" | "Nota" | "Ideia".
+        status: Opcional. "Aberto" | "Em andamento" | "Concluído".
+        data_inicio / data_fim: Opcional. YYYY-MM-DD. Intervalo de datas.
+
+    Returns:
+        dict com:
+            - "arquivados": list[dict] — itens arquivados (nome/tipo/status/data).
+            - "falhas": list[dict] — itens que falharam.
+            - "erro": str — se a consulta inicial falhou (chave presente só em erro).
+    """
+    resultado = listar_itens_no_notion(tipo=tipo, status=status,
+                                       data_inicio=data_inicio, data_fim=data_fim)
+
+    if isinstance(resultado, dict) and "erro" in resultado:
+        return {"erro": resultado["erro"]}
+
+    if not resultado:
+        return {"arquivados": [], "falhas": []}
+
+    arquivados = []
+    falhas = []
+    for item in resultado:
+        page_id = item.get("page_id")
+        if not page_id:
+            falhas.append(item)
+            continue
+        try:
+            notion.pages.update(page_id=page_id, archived=True)
+            arquivados.append(item)
+        except Exception as e:
+            print(f"[ERRO BULK] Falha ao arquivar {item.get('nome')} ({page_id}): {e}")
+            falhas.append(item)
+
+    print(f"[NOTION/BULK] Arquivados: {len(arquivados)} | Falhas: {len(falhas)}")
+    return {"arquivados": arquivados, "falhas": falhas}

@@ -25,9 +25,9 @@ from trembinho.agente import criar_historico_novo
 # Configuração da janela deslizante
 # -----------------------------------------------------------------------------
 # Máximo de mensagens user/assistant mantidas (além do system prompt fixo).
-# 20 = 10 pares de troca, suficiente pra conversas de prospecção sem estourar
-# o num_ctx=8192 do Qwen 14B.
-JANELA_MAXIMA_MENSAGENS = 20
+# 50 = 25 pares de troca. Com context length 64k no Ollama, dá espaço pra conversa
+# mais longa com melhor memória de contexto. Atualizado em Abril 2026.
+JANELA_MAXIMA_MENSAGENS = 50
 
 
 # -----------------------------------------------------------------------------

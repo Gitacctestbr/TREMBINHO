@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add *)",
+      "Bash(git push *)",
+      "Bash(python *)",
+      "Bash(venv/Scripts/python.exe *)",
+      "Bash(C:/Users/DESKTOP/desktop/trembinho/venv/Scripts/python.exe *)",
+      "Bash(tasklist //FI \"IMAGENAME eq pythonw.exe\" //FI \"IMAGENAME eq python.exe\")",
+      "Bash(tasklist)",
+      "Bash(taskkill *)",
+      "Bash(start \"\" /B \"C:/Users/DESKTOP/desktop/trembinho/venv/Scripts/pythonw.exe\" \"C:/Users/DESKTOP/desktop/trembinho/tray_app.py\")",
+      "Bash(reg query *)"
+    ]
+  }
+}

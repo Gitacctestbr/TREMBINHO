@@ -1,200 +1,152 @@
 # TREMBINHO — Segundo Cérebro SDR
-## Briefing para Claude Code
+**Assistente conversacional local que gerencia pipeline Notion via linguagem natural (PT-BR).**
 
 ---
 
-## IDENTIDADE DO PROJETO
+## STACK & CREDENCIAIS
 
-**Nome:** Trembinho  
-**Dono:** SDR da V4 Company (assessoria de marketing digital / performance)  
-**Missão:** Assistente conversacional que gerencia pipeline de prospecção no Notion via linguagem natural (PT-BR), acessível por terminal local e Telegram bidirecional.  
-**Ambiente:** 100% local no Windows (VS Code + PowerShell), exceto chamadas a APIs externas.  
-**Hardware:** Ryzen 5 5500, 32GB RAM, 16GB VRAM.
+- **LLM:** Ollama + Qwen 2.5 14B (temperature=0.3, num_ctx=8192)
+- **Banco:** Notion API (database "trembobase")
+- **Chat:** Telegram (Long Polling)
+- **Python:** ollama, notion-client, requests, python-dotenv, dateparser
 
----
-
-## STACK
-
-- **LLM local:** Ollama rodando `qwen2.5:14b` (temperature=0.3, num_ctx=8192)
-- **Notion API:** versão `2025-09-03` via `notion-client` — database "trembobase"
-- **Telegram:** Long Polling via `requests` puro (sem python-telegram-bot)
-- **Python 3**, `ollama`, `notion-client`, `requests`, `python-dotenv`, `dateparser`
-- **Repositório:** GitHub (privado)
-
-### Variáveis de ambiente (.env na raiz)
 ```
-TELEGRAM_BOT_TOKEN
-TELEGRAM_CHAT_ID
-NOTION_API_KEY
-NOTION_DATABASE_ID
-GEMINI_API_KEY      # presente mas não usada ativamente
-GROQ_API_KEY        # será usada no Sprint 5 (voice notes)
+.env (NÃO commitar):
+TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+NOTION_API_KEY, NOTION_DATABASE_ID
+GEMINI_API_KEY, GROQ_API_KEY (opcionais)
 ```
 
 ---
 
-## ESTRUTURA DE ARQUIVOS
+## ARQUIVOS PRINCIPAIS
 
-```
-trembinho/                  ← pacote principal
-  __init__.py
-  agente.py                 ← MOTOR PRINCIPAL. Nunca quebre este arquivo.
-  personalidade.py          ← system prompt v6 (Malandragem Semântica)
-  notion.py                 ← integração Notion (novo contrato: list[dict])
-  datas.py                  ← interpretador de datas PT-BR (5 camadas)
-  memoria.py                ← histórico por chat_id (thread-safe)
-  config.py                 ← carregamento do .env
-  notificador.py            ← envio Telegram com fila de retry em disco
-  ponte_telegram.py         ← orquestrador listener ↔ motor ↔ memória
-  telegram_listener.py      ← Long Polling, firewall de chat_id, offset em disco
-
-main.py                     ← entry point modo terminal
-testar_ponte.py             ← entry point TEMPORÁRIO do bot bidirecional
-verificar_pendencias.py     ← relatório diário (cron) "BOM DIA CHEFE"
-
-.env                        ← NÃO commitar nunca
-telegram_offset.txt         ← NÃO commitar (controle interno do listener)
-fila_retry_telegram.txt     ← NÃO commitar (fila de retry de mensagens)
-CLAUDE.md                   ← este arquivo
-```
+| Arquivo | Função |
+|---------|--------|
+| `agente.py` | **MOTOR CRÍTICO.** processar_mensagem() → Qwen → tool_calls. Blindagem N3 (regex fallback). |
+| `main.py` | REPL terminal interativo |
+| `listener_main.py` | Bot Telegram oficial (auto-reinício, log estruturado) |
+| `tray_app.py` | App de bandeja Windows (liga/desliga bot, atalhos) |
+| `ponte_telegram.py` | Orquestrador: comandos, typing, memória, particionamento |
+| `agendador.py` | Notificações agendadas (JSON, thread daemon 30s, parsing PT-BR) |
+| `datas.py` | Parser de datas PT-BR (5 camadas) |
+| `memoria.py` | Histórico por chat_id (janela 20 msgs, thread-safe) |
+| `notion.py` | CRUD Notion (retorna list[dict]) |
+| `notificador.py` | Envio Telegram + retry em disco |
+| `verificar_pendencias.py` | Relatório diário "BOM DIA CHEFE" (cron) |
 
 ---
 
-## ARQUITETURA — FLUXO PRINCIPAL
+## FUNCIONALIDADES IMPLEMENTADAS
 
-```
-Telegram (texto) 
-  → telegram_listener.py   (recebe, valida chat_id, chama callback)
-  → ponte_telegram.py      (comandos especiais, typing, memória)
-  → agente.py              (enriquece data → Ollama Qwen → tool calls → Blindagem N3)
-  → notion.py              (cria ou lista no Notion)
-  → ponte_telegram.py      (formata resposta HTML, envia via notificador)
-  → Telegram (resposta formatada)
-```
+**Pipeline Notion**
+- `"anota lead João para segunda às 10h"` → salva
+- `"quais tarefas tenho essa semana?"` → lista com filtros
+- `"marca ABC como em andamento"` → edita
+- `"remove a tarefa de...?"` → exclui
+- Filtros: tipo (Lead/Tarefa/Nota/Ideia), status (Aberto/Em andamento/Concluído), data
 
----
+**Notificações**
+- `"lembrete em 2h: enviar proposta"` → agenda
+- Aceita: "em 5min", "daqui 1h30", "às 14h30", "amanhã às 9h"
+- `/notificacao` → lista pendentes
+- Persistência JSON + boot recovery + thread check 30s
 
-## MÓDULOS CRÍTICOS — LEIA ANTES DE EDITAR
+**Terminal & Telegram**
+- Terminal: REPL (main.py)
+- Bot: Long Polling + auto-reinício (listener_main.py)
+- Comandos: `/start`, `/help`, `/reset`, `/status`, `/notificacao`
+- Typing indicator, particionamento >4096 chars, memória por chat_id
 
-### `agente.py` — Motor puro
-- `processar_mensagem(texto, historico, auto_confirmar_gravacao)` é o coração do sistema.
-- **Blindagem Nível 3:** quando Qwen falha nos campos, extratores heurísticos (regex) capturam `nome`, `data` e `descricao` direto da mensagem crua. Funções: `_extrair_nome_heuristico()`, `_extrair_descricao_heuristica()`, `_extrair_data_forcada_da_mensagem()`.
-- **Formatação de saída:** `_formatar_listagem()` (completa, com cabeçalho 🎯), `_formatar_listagem_compacta()` (só bullets, pra `verificar_pendencias.py`), `_formatar_confirmacao_salvamento()`.
-- `DEBUG_EXTRACAO = False` em produção. Manter False salvo indicação contrária.
-- **NUNCA** remova ou simplifique a Blindagem N3 sem autorização explícita.
-
-### `notion.py` — Novo contrato (Passo 5.6)
-- `listar_itens_no_notion()` retorna `list[dict]` com chaves `{nome, tipo, status, data, descricao}` ou `{"erro": "..."}`.
-- `criar_pagina_no_notion()` retorna `True/False`. Parâmetro `auto_confirmar=True` pula o [Y/n] do terminal (usado pelo Telegram).
-- **Não existe mais string crua de listagem.** A função `listar_itens_formatado_legado()` é deprecated — não referencie ela em código novo.
-
-### `personalidade.py` — System prompt v6
-- Contém "Malandragem Semântica v6" com few-shots ensinando o Qwen a extrair `nome`, `tipo`, `data` e `descricao` da mensagem em PT-BR.
-- Tem seção explícita "CAMPO descricao — DESCRIÇÃO LIVRE" com 5 exemplos. Não remova.
-
-### `datas.py` — Interpretador determinístico
-- 5 camadas: triviais (hoje/amanhã) → regex DD/MM → dias da semana → "daqui a X" → dateparser.
-- 17/18 testes unitários passando. Rode com `python -m trembinho.datas` pra verificar.
-
-### `memoria.py` — Histórico por chat_id
-- Janela deslizante de 20 mensagens + system prompt preservado.
-- Thread-safe via `threading.Lock`.
-- 5/5 testes passando. Rode com `python -m trembinho.memoria`.
+**Outros**
+- Tray app (bandeja Windows, auto-startup, atalhos)
+- Relatório diário (manha|tarde|fim)
+- HTML+emojis (👤 Lead, 📞 Tarefa, 📝 Nota, 💡 Ideia; 🟢 Aberto, 🟡 Em andamento, ✅ Concluído)
 
 ---
 
-## CAMPOS DO NOTION (database "trembobase")
+## FERRAMENTAS (Function Calling)
 
-| Campo | Tipo | Valores válidos |
-|---|---|---|
+O Qwen reconhece estas funções:
+
+| Função | Parâmetros | Uso |
+|--------|-----------|-----|
+| `ferramenta_salvar_notion` | nome, tipo, status, data, descricao | Criar |
+| `ferramenta_listar_notion` | tipo?, status?, data_inicio?, data_fim? | Buscar |
+| `ferramenta_editar_notion` | nome_busca, campo, novo_valor | Atualizar |
+| `ferramenta_excluir_notion` | nome_busca | Deletar |
+| `ferramenta_agendar_notificacao` | tempo, contexto | Agendar lembrete |
+| `ferramenta_listar_notificacoes` | (nenhum) | Ver lembretes |
+| `ferramenta_cancelar_notificacao` | id_ou_contexto | Remover lembrete |
+| `ferramenta_editar_notificacao` | id, novo_tempo?, novo_contexto? | Editar lembrete |
+
+---
+
+## CAMPOS DO NOTION
+
+| Campo | Tipo | Valores |
+|-------|------|--------|
 | Nome | title | texto livre |
 | Tipo | select | Lead / Tarefa / Nota / Ideia |
 | Status | select | Aberto / Em andamento / Concluído |
-| Data | date | ISO 8601 (YYYY-MM-DD ou YYYY-MM-DDTHH:MM:00) |
+| Data | date | YYYY-MM-DD |
 | Descrição | rich_text | texto livre |
-
----
-
-## ESTADO ATUAL (Abril 2026)
-
-### ✅ Funcionando e validado
-- Modo terminal (`python main.py`)
-- Bot Telegram bidirecional (`python testar_ponte.py`)
-- Listagens com cards formatados (bullet denso com emojis)
-- Gravação com Blindagem N3 (nome, data, descrição)
-- Relatório diário (`python verificar_pendencias.py --horario manha|tarde|fim`)
-- Memória de conversa por chat_id
-- Comandos especiais `/start`, `/help`, `/reset`, `/status`
-- Push notifications com retry em disco
-
-### ⚠️ Dívidas técnicas abertas
-- `testar_ponte.py` é gambiarra temporária — será substituído por `listener_main.py`
-- Bot morre quando PowerShell fecha (sem deploy automatizado ainda)
-- Qwen nem sempre infere `status=Aberto` em perguntas de listagem
-- Mensagens não-texto no Telegram (áudio, foto, sticker) são ignoradas silenciosamente
-
----
-
-### Fora de escopo (não implementar sem autorização)
-- Persistência de histórico em SQLite
-- TTS (text-to-speech)
-- WhatsApp / Discord
-- Dashboard web
-- Google Calendar
-
----
-
-## REGRAS DE TRABALHO (INEGOCIÁVEIS)
-
-1. **1 arquivo por vez.** Nunca edite múltiplos arquivos de uma vez sem autorização explícita. Entregue 1 arquivo → espere confirmação → avance.
-
-2. **Código completo sempre.** Ao fornecer código, entregue o arquivo `.py` INTEIRO e ATUALIZADO. É proibido usar `# resto do código permanece igual` ou pseudocódigo.
-
-3. **Analise antes de codar.** Leia os arquivos relevantes ANTES de escrever qualquer linha. Especialmente `agente.py` — não quebre a Blindagem N3.
-
-4. **Não quebre o que funciona.** Zero regressão. Toda mudança preserva o que já está validado.
-
-5. **Debug visível.** Qualquer heurística nova deve ter log `[DEBUG]` ou `[BLINDAGEM NX]` desligável por flag.
-
-6. **Validar com evidências reais.** Antes de marcar algo como concluído, pedir print do terminal e/ou Telegram.
-
-7. **Português claro.** O dono do projeto não é programador. Traduza jargão técnico. Explique decisões em linguagem acessível antes de escrever código.
 
 ---
 
 ## COMO RODAR
 
 ```powershell
-# Modo terminal
+# Terminal
 python main.py
 
-# Bot Telegram bidirecional (temporário)
-python testar_ponte.py
+# Bot Telegram (produção)
+python listener_main.py
 
-# Relatório diário manual
-python verificar_pendencias.py --horario manha
-python verificar_pendencias.py --horario tarde
-python verificar_pendencias.py --horario fim
+# Tray app (Windows)
+python tray_app.py
 
-# Testes unitários
+# Relatório (cron)
+python verificar_pendencias.py --horario manha|tarde|fim
+
+# Testes
 python -m trembinho.datas
 python -m trembinho.memoria
 ```
 
 ---
 
-## PADRÃO DE FORMATAÇÃO DO TELEGRAM
+## ESTADO (Abril 2026)
 
-As respostas usam **HTML** (não Markdown). Parse mode: `HTML`.
+**✅ Pronto:** Terminal, Bot Telegram, Notion CRUD, Notificações, Tray, Relatório, HTML+emojis, Blindagem N3/N4, Datas PT-BR, Memória, Retry  
+**⚠️ Dívidas:** tray dispara testar_ponte.py (devia ser listener_main.py), sem instalador .exe, Qwen às vezes não infere status, áudio/foto ignorados
 
-```
-🎯 <b>Tarefas • Aberto • hoje</b>
+---
 
-• 📞 Ligar para Rafael — 📅 18/abr 10:00 🟢
-• 📞 Mandar proposta Gustavo — 📅 18/abr 🟢
+## REGRAS INEGOCIÁVEIS
 
-<i>2 itens</i>
-```
+1. **1 arquivo por vez** — edite, entregue, aguarde OK
+2. **Código completo** — nunca `# resto permanece igual`
+3. **Leia antes** — especialmente `agente.py` (não quebre Blindagem N3)
+4. **Zero regressão** — todo change preserva validado
+5. **Debug visível** — flag `[DEBUG]` ou `[BLINDAGEM NX]` desligável
+6. **Validar com prints** — terminal e/ou Telegram antes de "done"
+7. **PT-BR claro** — traduza jargão, explique em linguagem acessível
 
-Emojis por tipo: 👤 Lead | 📞 Tarefa | 📝 Nota | 💡 Ideia  
-Emojis por status: 🟢 Aberto | 🟡 Em andamento | ✅ Concluído
+---
+
+## MÓDULOS CRÍTICOS
+
+**agente.py:** `processar_mensagem(texto, historico, auto_confirmar_gravacao)` é coração. Blindagem N3 → regex fallback se Qwen falha. DEBUG_EXTRACAO=False produção.
+
+**notion.py:** `listar_itens_no_notion()` retorna `list[dict]` (não string crua). `criar_pagina_no_notion(..., auto_confirmar=True)` pra Telegram.
+
+**agendador.py:** Parsing 5-camadas (min → h → abs → datas.py). JSON persistência. Thread 30s. `DEBUG_AGENDADOR=True`.
+
+**ponte_telegram.py:** Intercepta `/cmd`, typing 4s renovado, particiona >4096, memória chat_id.
+
+**listener_main.py:** Auto-restart crash counter (max 10, reset >300s). Log console+arquivo.
+
+**tray_app.py:** Ícone verde/cinza, menu liga/desliga, Registry startup, atalho Desktop.
+
+**verificar_pendencias.py:** `--horario manha|tarde|fim` → copy SDR narrativo.
