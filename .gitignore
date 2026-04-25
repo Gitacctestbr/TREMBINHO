@@ -23,3 +23,12 @@ iniciar_bot.bat
 
 # Configs do VS Code
 .vscode/
+
+# Notificacoes agendadas (contem chat_id Telegram + dados pessoais)
+notificacoes_agendadas.json
+
+# Configs locais do Claude Code
+.claude/settings.local.json
+
+# Backups antigos
+trembinho/agente_backup_ollama.py

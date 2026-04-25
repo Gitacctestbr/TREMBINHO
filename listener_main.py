@@ -18,6 +18,8 @@ import time
 import logging
 from dotenv import load_dotenv
 
+sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
 from trembinho.telegram_listener import rodar_listener
 from trembinho.ponte_telegram import processar_mensagem_telegram
 from trembinho.agendador import inicializar_agendador
